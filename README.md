@@ -41,5 +41,22 @@
 
 验收：`mvn test -Dtest=WaterQualitySamplingAcceptanceTest`，14 个检查点逐段输出报告，失败即停并给出停点。
 
+## 饲料批号与投喂配方（aqua-3）
+
+模块包路径 `com.evops.aqua.feed`，打通：饲料批号生命周期 → 按苗种/日龄/水温的配方版本 → 投喂单草稿/锁定/执行 → 试喂与正式分桶日汇总 → 海水养殖权限收紧停推进，全程留证。
+
+- 饲料批号（`/api/aqua/feeding/lots`）：批号全局唯一、登记写首批入库流水；`POST /{id}/restock` 补货入库（requestId 强制幂等）；库存以只追加流水为事实来源，批号无删除接口、无删除标记。
+- 效期与库存拦截：**登记时已过期直接冻结**；锁定/执行前复检，过期批号即时冻结拦截，**库存不足拦截**；出库后用尽自动冻结。
+- 投喂配方版本（`POST /api/aqua/feeding/formula-versions`）：配方行按 **苗种 + 日龄区间（天）+ 水温区间（℃）** 闭区间匹配投喂量（kg/餐×餐次）；同苗种日龄/水温区间重叠拒绝发布；新版本发布后旧版本置 SUPERSEDED 但**永不删改、仍可查询**。
+- 投喂单（`/api/aqua/feeding/orders`）：创建时按批次投苗日推算日龄、用当前生效配方匹配计划量（匹配不到拒绝开单，创建 requestId 幂等）；**必须先 `POST /{id}/lock` 锁定才允许 `POST /{id}/execute` 执行**；锁定时冻结配方版本 JSON 快照、批号快照，并校验批号饲料品种与配方一致。
+- 临时减量：实际量小于计划量即减量，**必须登记减量原因与审批人**，否则锁定被拒绝；不允许超量。
+- 执行扣库存：执行时写 OUT 流水并扣减批号库存；**执行 requestId 幂等，重复执行/换号重复执行都不会二次扣库存**。
+- 新版本只作用于未锁定草稿：发布 V2 时同事务重绑 DRAFT 单并重算计划量；**已锁定/已执行投喂单继续引用旧版本快照，历史投喂事实不随后续改版变化**（V2 无匹配的草稿保留原版本并留痕待人工处理）。
+- 日汇总（`GET /api/aqua/feeding/orders/daily-summary`）：按池按日仅统计已执行单，**formal（正式投喂）与 trial（试喂）严格分桶**，各含单数/实际总量/减量次数，不提供跨类型合并总量；草稿不进汇总。
+- 海水养殖权限开关（`/api/aqua/feeding/governance`）：`POST /tighten` 收紧后**饲料批号停止推进**——在库批号整批冻结，登记/补货/开单/锁定/执行全部拦截（拦截本身独立事务留 BLOCK 证据）；**配方版本保留已确认事实**，只读可查、不删不改，新配方发布一并拦截。`POST /reopen` 放开后效期复检：未过期批号解冻恢复推进，过期批号继续冻结。
+- 变更证据：所有推进动作写 `t_feed_change_evidence`（含操作前后快照与 requestId），经 `GET /api/aqua/feeding/evidence` 按对象/动作/requestId 追溯；配方匹配尝试另留 `t_feed_formula_match`（命中与否均留痕）。
+
+验收：`mvn test -Dtest=FeedLotAndFormulaAcceptanceTest`，14 个检查点逐段输出报告，失败即停并给出停点。
+
 
 
